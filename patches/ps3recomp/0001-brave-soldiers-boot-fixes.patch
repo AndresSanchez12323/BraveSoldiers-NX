@@ -60,10 +60,25 @@ index d956e6dd..9bda8a49 100644
  
      return CELL_OK;
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 298ee7de..8b51e2f5 100644
+index 298ee7de..c2d71625 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
-@@ -2398,7 +2398,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -158,6 +158,14 @@ int cellGcm_take_flip_pending(void)
+  * keep presenting display buffer 0 for a title that flips through 0xFEAD. */
+ static void gcm_set_current_display_buffer(u32 bufferId)
+ {
++    /* Match guest flip requests to display registrations without forcing a RT. */
++    static int trace = -1;
++    if (trace < 0) trace = getenv("GCM_FLIP_TRACE") != NULL;
++    if (trace && bufferId < CELL_GCM_MAX_DISPLAY_BUFFER_NUM)
++        fprintf(stderr, "[FLIP_TARGET] id=%u offset=0x%X size=%ux%u registered=%d\n",
++                bufferId, s_display_buffers[bufferId].offset,
++                s_display_buffers[bufferId].width, s_display_buffers[bufferId].height,
++                s_display_buffer_set[bufferId]);
+     s_current_display_buffer_id = bufferId;
+     if (rsx_draw_engine_enabled())
+         rsx_draw_engine_note_flip(bufferId);
+@@ -2398,7 +2406,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
          }
          if ((w & 3) == 2) {                    /* CALL: offset | 2 */
              { u32 tgt = w & 0x1FFFFFFCu;
@@ -73,10 +88,10 @@ index 298ee7de..8b51e2f5 100644
                s_fifo_getoff  = tgt; }
              continue;
 diff --git a/libs/video/rsx_commands.c b/libs/video/rsx_commands.c
-index a39639f1..87509c6f 100644
+index a39639f1..ae448760 100644
 --- a/libs/video/rsx_commands.c
 +++ b/libs/video/rsx_commands.c
-@@ -340,6 +340,76 @@ static int process_vertex_attrib_method(rsx_state* state, u32 method, u32 data)
+@@ -340,6 +340,85 @@ static int process_vertex_attrib_method(rsx_state* state, u32 method, u32 data)
      return -1;
  }
  
@@ -110,23 +125,32 @@ index a39639f1..87509c6f 100644
 +    if (!stride) stride = packed;
 +    if (!packed || !stride) return;
 +    u32 count = s_inline_len / stride;
-+    { static int n = 0; if (PS3_LOG_FIRST(n, 8))
++    /* Correlate immediate UI/composite draws with their actual destination. */
++    { static int trace = -1; if (trace < 0) trace = getenv("RSX_INLINE_TRACE") != NULL;
++      if (trace) fprintf(stderr, "[INLINE_TARGET] offA=0x%X offB=0x%X target=0x%X size=%ux%u verts=%u bytes=%u\n",
++          state->surface_color_offset[0], state->surface_color_offset[1], state->color_target,
++          state->surface_clip_w, state->surface_clip_h, count, s_inline_len); }
++    /* Keep the payload dump inside the same bounded diagnostic gate: the
++     * saturating counter stays at eight after logging, so testing n <= 8
++     * separately would print every later draw. */
++    { static int n = 0, trace = -1;
++      if (trace < 0) trace = getenv("RSX_INLINE_TRACE") != NULL;
++      if (trace && PS3_LOG_FIRST(n, 8)) {
 +        fprintf(stderr, "[RSX] INLINE_ARRAY prim=%u bytes=%u stride=%u packed=%u verts=%u\n",
 +                state->primitive_type, s_inline_len, stride, packed, count);
-+        if (n <= 8) {
-+            fprintf(stderr, "[RSX]   attribs:");
-+            for (u32 i = 0; i < RSX_MAX_VERTEX_ATTRIBS; i++)
-+                if (state->vertex_attribs[i].enabled)
-+                    fprintf(stderr, " a%u(t%u x%u s%u)", i, state->vertex_attribs[i].type,
-+                            state->vertex_attribs[i].size, state->vertex_attribs[i].stride);
-+            fprintf(stderr, " words:");
-+            for (u32 k = 0; k < s_inline_len / 4u && k < 14; k++) {
-+                u32 w = ((u32)s_inline_buf[k*4] << 24) | ((u32)s_inline_buf[k*4+1] << 16) |
-+                        ((u32)s_inline_buf[k*4+2] << 8) | s_inline_buf[k*4+3];
-+                float f; memcpy(&f, &w, 4);
-+                fprintf(stderr, " %g", f);
-+            }
-+            fprintf(stderr, "\n");
++        fprintf(stderr, "[RSX]   attribs:");
++        for (u32 i = 0; i < RSX_MAX_VERTEX_ATTRIBS; i++)
++            if (state->vertex_attribs[i].enabled)
++                fprintf(stderr, " a%u(t%u x%u s%u)", i, state->vertex_attribs[i].type,
++                        state->vertex_attribs[i].size, state->vertex_attribs[i].stride);
++        fprintf(stderr, " words:");
++        for (u32 k = 0; k < s_inline_len / 4u && k < 14; k++) {
++            u32 w = ((u32)s_inline_buf[k*4] << 24) | ((u32)s_inline_buf[k*4+1] << 16) |
++                    ((u32)s_inline_buf[k*4+2] << 8) | s_inline_buf[k*4+3];
++            float f; memcpy(&f, &w, 4);
++            fprintf(stderr, " %g", f);
++        }
++        fprintf(stderr, "\n");
 +        } }
 +    if (!count || !s_backend || !s_backend->draw_arrays) return;
 +
@@ -153,7 +177,7 @@ index a39639f1..87509c6f 100644
  /* ---------------------------------------------------------------------------
   * Main method dispatch
   * -----------------------------------------------------------------------*/
-@@ -612,6 +682,11 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
+@@ -612,6 +691,11 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
  
      /* Color mask */
      if (method == NV4097_SET_COLOR_MASK) {
@@ -165,7 +189,7 @@ index a39639f1..87509c6f 100644
          state->color_mask = data;
          state->color_mask_dirty = 1;
          return 0;
-@@ -836,8 +911,27 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
+@@ -836,8 +920,27 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
      }
  
  
@@ -193,6 +217,36 @@ index a39639f1..87509c6f 100644
          if (data != 0) {
              state->primitive_type = data;
              state->in_begin_end = 1;
+@@ -970,14 +1073,25 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
+      * The draw engine handles the actual present; suppress the unknown log. */
+     if (method == 0xE920 || method == 0xE924) return 0;
+ 
+-    /* Unrecognized method -- log in debug builds */
+-#ifndef NDEBUG
++    /* Release builds need the same diagnostics when investigating missing
++     * composition commands. Deduplicate by method so repeated state writes
++     * cannot hide a later, unsupported draw command. */
++    static int s_unknown_enabled = -1;
++    static unsigned char s_unknown_seen[0x10000];
+     static int s_unknown_count = 0;
+-    if (s_unknown_count < 50) {
++    if (s_unknown_enabled < 0) {
++#ifndef NDEBUG
++        s_unknown_enabled = 1;
++#else
++        s_unknown_enabled = getenv("RSX_UNK") != NULL;
++#endif
++    }
++    if (s_unknown_enabled && s_unknown_count < 256 &&
++        (method >= sizeof(s_unknown_seen) || !s_unknown_seen[method])) {
++        if (method < sizeof(s_unknown_seen)) s_unknown_seen[method] = 1;
+         printf("[RSX] unknown method 0x%04X = 0x%08X\n", method, data);
+         s_unknown_count++;
+     }
+-#endif
+ 
+     return -1;
+ }
 diff --git a/libs/video/rsx_commands.h b/libs/video/rsx_commands.h
 index 246ca166..5fd36444 100644
 --- a/libs/video/rsx_commands.h
@@ -219,10 +273,35 @@ index 246ca166..5fd36444 100644
  
  /* ---------------------------------------------------------------------------
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
-index bc05a308..cc1b2ec3 100644
+index bc05a308..defa6fd4 100644
 --- a/libs/video/rsx_d3d12_backend.c
 +++ b/libs/video/rsx_d3d12_backend.c
-@@ -166,7 +166,12 @@ typedef struct {
+@@ -56,8 +56,22 @@
+  * -----------------------------------------------------------------------*/
+ 
+ #define FRAME_COUNT         2   /* double buffering */
+-#define MAX_VERTICES    393216  /* per-frame vertex buffer (dbgfont submits
+-                                 * ~7.5k verts/frame; leave generous headroom) */
++/* The entire frame must fit when accumulation is enabled: silently clipping
++ * scene uploads also drops the final full-screen composite. Ports can size
++ * this once before backend initialization; both parity strides use the same
++ * immutable capacity. Keep a bounded allocation even for malformed input. */
++static u32 d3d12_vertex_capacity(void)
++{
++    static u32 capacity;
++    if (!capacity) {
++        const char* value = getenv("RSX_VERTEX_CAPACITY");
++        unsigned long requested = value ? strtoul(value, NULL, 10) : 393216ul;
++        capacity = (requested >= 393216ul && requested <= 2097152ul)
++            ? (u32)requested : 393216u;
++    }
++    return capacity;
++}
++#define MAX_VERTICES (d3d12_vertex_capacity())
+ #define VP_MAX_INDICES  (1u << 21)  /* per-frame index buffer of indexed VP draws, x2 parity */
+ #define MAX_DRAWS         2048  /* per-frame draw records. Sized from the
+                                  * measured worst case (~1841, FRAME_BUDGET);
+@@ -166,7 +180,12 @@ typedef struct {
      D3D12_RESOURCE_STATES st;          /* tracked resource state */
      int                   used;        /* referenced this frame */
  } OffRT;
@@ -236,7 +315,7 @@ index bc05a308..cc1b2ec3 100644
  
  /* Depth surface, one per guest zeta offset. The pass chain keeps several
   * (God of War HD: the scene's 2x-AA depth at 0x17F0000 and the resolved depth
-@@ -183,12 +188,19 @@ typedef struct {
+@@ -183,12 +202,19 @@ typedef struct {
  } OffDS;
  #define MAX_OFF_DS   6
  #define DS_SRV_BASE  21  /* SRV heap slots 21..32 hold depth + stencil SRVs (2 per OffDS) */
@@ -257,7 +336,7 @@ index bc05a308..cc1b2ec3 100644
  
  /* Per-frame VP texture slot: a guest texture uploaded for this frame's VP
   * draws (re-uploaded every frame -- gcm/cube's plasma animates in guest
-@@ -1245,7 +1257,7 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1245,7 +1271,7 @@ static int init_d3d12(u32 width, u32 height)
                  }
              }
              hd.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -266,7 +345,7 @@ index bc05a308..cc1b2ec3 100644
              hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
              hr = s_d3d.device->lpVtbl->CreateDescriptorHeap(
                  s_d3d.device, &hd, &IID_ID3D12DescriptorHeap, (void**)&s_d3d.srv_heap);
-@@ -1260,7 +1272,7 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1260,7 +1286,7 @@ static int init_d3d12(u32 width, u32 height)
                  nv.Texture2D.MipLevels = 1;
                  D3D12_CPU_DESCRIPTOR_HANDLE hh;
                  s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &hh);
@@ -275,7 +354,7 @@ index bc05a308..cc1b2ec3 100644
                      s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, NULL, &nv, hh);
                      hh.ptr += s_d3d.srv_inc;
                  }
-@@ -1327,7 +1339,7 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1327,7 +1353,7 @@ static int init_d3d12(u32 width, u32 height)
          srv_range.BaseShaderRegister = 0;
          srv_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
  
@@ -284,7 +363,7 @@ index bc05a308..cc1b2ec3 100644
          rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;   /* b0 = vp_c bank */
          rp[0].Descriptor.ShaderRegister = 0;
          rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-@@ -1357,8 +1369,21 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1357,8 +1383,21 @@ static int init_d3d12(u32 width, u32 height)
              rp[3 + _s].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
          }
  
@@ -307,7 +386,7 @@ index bc05a308..cc1b2ec3 100644
          rd.NumStaticSamplers = 0; rd.pStaticSamplers = NULL;
          rd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
  
-@@ -2183,6 +2208,7 @@ static void vp_sampler_defaults(void)
+@@ -2183,6 +2222,7 @@ static void vp_sampler_defaults(void)
      s.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
      s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
      vp_sampler_write(1, &s);
@@ -315,7 +394,7 @@ index bc05a308..cc1b2ec3 100644
      s_d3d.samp_n = 2;
  }
  
-@@ -2195,7 +2221,7 @@ static int vp_sampler(const D3D12DrawRecord* dr, int u)
+@@ -2195,7 +2235,7 @@ static int vp_sampler(const D3D12DrawRecord* dr, int u)
                         dr->tex[u].ctrl0 & 0x70u, dr->tex[u].border };
      for (u32 i = 2; i < s_d3d.samp_n; i++)
          if (!memcmp(s_d3d.samp_key[i], k, sizeof k)) return (int)i;
@@ -324,7 +403,7 @@ index bc05a308..cc1b2ec3 100644
      const u32 i = s_d3d.samp_n++;
      memcpy(s_d3d.samp_key[i], k, sizeof k);
      D3D12_SAMPLER_DESC s;
-@@ -2646,6 +2672,11 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2646,6 +2686,11 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
          char* rp = strstr(hlsl, "return r[0];");
          if (rp) memcpy(rp, "return float4(1,0,1,1)", 23);
      }
@@ -336,7 +415,7 @@ index bc05a308..cc1b2ec3 100644
      ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
      HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
                              "main", "ps_5_0", 0, 0, &pb, &e);
-@@ -2654,7 +2685,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2654,7 +2699,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
              printf("[FP] PS compile FAIL (fp=0x%08X): %s\n", fp_addr,
                     e ? (const char*)e->lpVtbl->GetBufferPointer(e) : "?");
          if (e) e->lpVtbl->Release(e);
@@ -345,7 +424,7 @@ index bc05a308..cc1b2ec3 100644
      }
      if (e) e->lpVtbl->Release(e);
  
-@@ -2750,20 +2781,38 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2750,20 +2795,38 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      { static int doff = -1;
        if (doff < 0) { const char* e = getenv("DEPTH_OFF"); doff = e ? atoi(e) : 0; }
        if (doff) { pd.DepthStencilState.DepthEnable = FALSE;
@@ -389,7 +468,7 @@ index bc05a308..cc1b2ec3 100644
      /* insert (evict oldest when full) */
      if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
          if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
-@@ -3579,7 +3628,7 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3579,7 +3642,7 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
            fprintf(stderr, "[DUCKCB] slot=%u vs_idx=%d posscale=(%g %g %g) posoffset=(%g %g %g)%c",
                    slot, vs_idx, vpx_dbg[0], vpx_dbg[1], vpx_dbg[2],
                    vpx_dbg[4], vpx_dbg[5], vpx_dbg[6], 10);
@@ -398,7 +477,7 @@ index bc05a308..cc1b2ec3 100644
                fprintf(stderr, "[DUCKCB]   c%d=(%g %g %g %g)%c", r,
                        c[r*4+0], c[r*4+1], c[r*4+2], c[r*4+3], 10);
        } }
-@@ -3591,6 +3640,15 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3591,6 +3654,15 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
      const float* vo_ = st->viewport_offset;
      vpx[0] = vpx[1] = vpx[3] = 1.0f;
      vpx[4] = vpx[5] = vpx[7] = 0.0f;
@@ -414,7 +493,7 @@ index bc05a308..cc1b2ec3 100644
      if (vs_[2] != 0.0f) { vpx[2] = vs_[2]; vpx[6] = vo_[2]; }
      else                { vpx[2] = 1.0f;   vpx[6] = 0.0f;   }
      /* DBG_ZOOM=<k> with DBG_CENTER="cx,cy": a debug camera applied in CLIP space,
-@@ -4418,10 +4476,26 @@ static void guest_fb_present(u32 fi)
+@@ -4418,10 +4490,26 @@ static void guest_fb_present(u32 fi)
  }
  
  
@@ -441,7 +520,7 @@ index bc05a308..cc1b2ec3 100644
  
      /* Drain the GPU before touching shared upload resources (vp_vb vertices,
       * vp_cb constants, per-frame texture staging): the previous frame's draws
-@@ -4823,9 +4897,13 @@ static void render_frame(void)
+@@ -4823,9 +4911,13 @@ static void render_frame(void)
                      continue;
                  }
              }
@@ -457,7 +536,7 @@ index bc05a308..cc1b2ec3 100644
                  static int en = -1;
                  if (en < 0) { const char* e = getenv("SCREEN_AS_TEX"); en = e ? atoi(e) : 1; }
                  if (en) {
-@@ -5354,7 +5432,12 @@ static void render_frame(void)
+@@ -5354,7 +5446,12 @@ static void render_frame(void)
                          sh.ptr += (u64)si * s_d3d.samp_inc;
                          s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 3 + _u, sh);
                      }
@@ -470,7 +549,7 @@ index bc05a308..cc1b2ec3 100644
                  /* Per-draw constants: this draw's vp_cb + FP texscale slots. */
                  s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 0,
                      s_d3d.vp_cb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_cb)
-@@ -5373,13 +5456,15 @@ static void render_frame(void)
+@@ -5373,13 +5470,15 @@ static void render_frame(void)
                        D3D12_CPU_DESCRIPTOR_HANDLE _rh =
                            (cur_rt >= 0) ? off_rt_rtv(cur_rt) : rtv_handle;
                        fprintf(stderr, "[DRAWARGS] verts=%u start=%u rt=%d rec=0x%08X bound=0x%08X"
@@ -488,7 +567,7 @@ index bc05a308..cc1b2ec3 100644
                  /* RT_REBIND=1: re-issue OMSetRenderTargets immediately before
                   * every draw instead of only when the target changes. A clear
                   * proves the RTV descriptor is good but not that the binding is
-@@ -5942,8 +6027,10 @@ static void d3d12_present(void* ud, u32 buffer_id)
+@@ -5942,8 +6041,10 @@ static void d3d12_present(void* ud, u32 buffer_id)
              break;
          }
  
@@ -500,7 +579,7 @@ index bc05a308..cc1b2ec3 100644
  
      /* FPS tracking */
      ULONGLONG now = GetTickCount64();
-@@ -6071,6 +6158,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
+@@ -6071,6 +6172,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
          if (blink_dbg())
              printf("[CLEAR] presenting %u accumulated draws at frame boundary\n",
                     s_d3d.draw_count);
@@ -508,7 +587,22 @@ index bc05a308..cc1b2ec3 100644
          render_frame();
          s_clear_presents++;
          s_last_clear_presented_flip = s_last_clear_boundary_flip;
-@@ -7786,6 +7874,15 @@ void rsx_d3d12_backend_present(void)
+@@ -7016,6 +7118,14 @@ static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count,
+ 
+ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+ {
++    /* Immediate full-screen passes arrive after the scene geometry; track
++     * remaining upload space when investigating a missing final composite. */
++    { static int trace = -1; if (trace < 0) trace = getenv("RSX_UPLOAD_TRACE") != NULL;
++      const rsx_state* st = s_d3d.current_rsx_state;
++      if (trace && st && st->inline_base)
++          fprintf(stderr, "[UPLOAD_SPACE] target=0x%X prim=%u count=%u used=%u capacity=%u draws=%u\n",
++              st->surface_color_offset[0], primitive, count, s_d3d.vp_vb_offset,
++              MAX_VERTICES * VP_VERT_STRIDE, s_d3d.draw_count); }
+     /* RSX_LIVE_FEED_DBG=1: pair with the [feed] method counts so "the FIFO
+      * carries no draw batches" can be checked against "the backend is told
+      * to draw" in the same run. */
+@@ -7786,6 +7896,15 @@ void rsx_d3d12_backend_present(void)
      { static int gfb = -1;
        if (gfb < 0) { const char* e = getenv("GCM_GUEST_FB"); gfb = e ? 1 : 0; }
        if (gfb) has_display = 1; }
@@ -524,7 +618,7 @@ index bc05a308..cc1b2ec3 100644
      if (s_composite_src) has_display = 1;
      if (has_display && s_d3d.draw_count > 0) s_seen_content = 1;
  
-@@ -7839,6 +7936,7 @@ void rsx_d3d12_backend_present(void)
+@@ -7839,6 +7958,7 @@ void rsx_d3d12_backend_present(void)
            if (remap < 0) { const char* e = getenv("TEX_REMAP"); remap = e ? atoi(e) : 0; }
            if (remap) rsx_reset_upload_claims(); }
          s_present_this_frame = has_display;

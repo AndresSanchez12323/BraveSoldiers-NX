@@ -15,15 +15,16 @@ Repositorio público: https://github.com/AndresSanchez12323/BraveSoldiers-NX. Al
 
 ---
 
-## Estado actual (2026-11-02, fin del turno de Claude)
+## Estado actual (2026-11-02, fin del turno de Codex)
 
 **Fase 1 (port a PC con ps3recomp), en curso.** El juego arranca en Windows (D3D12) y hace todo esto:
 - carga datos y partida;
 - pasa la comprobación de DLC;
 - **muestra los logos de arranque (Havok, Dimps, CRIWARE) a 60 FPS, sin parpadeo**.
 
-Después llega una fase de unos 570 draws por fotograma (escena del Santuario / pantalla de título) que **se ve en
-negro**. Es el problema abierto número 1.
+La pantalla negra de composición quedó resuelta (Arreglo 11). Se agotaba el espacio de subida de vértices
+antes de los draws finales. Ahora aparece la pantalla de título completa, fondo estrellado y texto START en
+español, sin forzar un RT. Captura: `local/recomp/codex_capacity06/title.png`.
 
 Funciona:
 - PPU recompilado (27 217 funciones) con build "Fast" (`build/pc-fast`).
@@ -36,47 +37,41 @@ Funciona:
   - un solo present por flip.
 
 No funciona / falta:
-1. **Fase Santuario/título en negro.** `PRESENT_LOG` muestra `on=0 off=566 present=0`: todos los draws van a RT
-   fuera de pantalla (sobre todo 0xEE0000) y ninguno al buffer de pantalla. La escena sí se dibuja:
-   `GCM_PRESENT_RT=EE0000` enseña las ruinas, y `RTT_SAVERT=EE0000` a Seiya en T-pose.
+1. **START funciona; transición al menú bloqueada.** Título confirmado con `on=16 present=1` y 1751 registros.
+   `pc/stubs.cpp` establece `RSX_VERTEX_CAPACITY=2097152`; el backend conserva su valor general 393216.
+   Reserva PC: 512 MiB por paridad, 1 GiB total. Optimizar antes de Switch.
 2. **Seiya en T-pose:** la animación no corre. Sospecha: trabajos SPU de Havok/animación sin ejecutar, o el skinning.
 3. **Vídeo de intro (CRI Mana) atascado** tras ~7 rondas PPU↔SPU. Se esquiva con `PS3_FS_HIDE=SEIYAps3-k.usm`, que
    `tools/run_game.ps1` pone siempre.
 4. **Audio:** los trabajos del JobQueue son CRI Atom (DspPack1 17504 B, DspPack2 30720 B, AsrVoice 30208 B). Están
    volcados en `local/recomp/spu/jobs_dump/` y **sin levantar**: se descartan, así que no hay sonido.
 5. Falta la HLE de `cellSysutilGetBgmPlaybackStatus2`.
-6. Mando/entrada sin probar: aún no llegamos a un menú.
+6. START probado por PAD_SCRIPT: sale del título y crea partida; mando físico y menú todavía sin validar.
 
 ---
 
 ## Siguientes pasos (en orden de prioridad)
 
-### 1. Fase Santuario/título en negro (EN CURSO)
-Objetivo: que la composición final llegue al buffer de pantalla (0x0 / 0x3C0000) sin `GCM_PRESENT_RT`.
+### 1. Probar START, menú y combate (EN CURSO)
+La composición está arreglada y la pantalla de título completa está comprobada visualmente.
+START ya está confirmado mediante `PAD_SCRIPT=55:0x0008` (codex_menu08) y a 50 s (codex_menu09).
+Dispara carga, diálogo HLE (auto-YES) y creación de SAVEDATA.DAT. Después queda el fondo estrellado.
 
-Pistas por orden:
-1. **Ver métodos RSX sin implementar en la build Fast.**
-   - El log `[RSX] unknown method` de `deps/ps3recomp/libs/video/rsx_commands.c` (≈ línea 1068) está dentro de
-     `#ifndef NDEBUG`, así que en `pc-fast` no sale nada.
-   - Añadir una variable (p. ej. `RSX_UNK=1`) que lo active también en Fast y ejecutar 60 s.
-   - INLINE_ARRAY era exactamente este tipo de fallo. Candidatos:
-     - `NV4097_INLINE_INDEX_ARRAY` (0x1824);
-     - vértices inmediatos `SET_VERTEX_DATA*` usados como draw;
-     - `NV3089`/`NV308A` (blits 2D, `SET_TRANSFER_IMAGE`);
-     - `NV0039` (copia de memoria).
-2. **Contar los flips de esa fase y su buffer.** Saber qué `buffer_id` pide `cellGcmSetFlip` y si los buffers
-   registrados con `cellGcmSetDisplayBuffer` siguen siendo 0x0/0x3C0000.
-   - Logs ya disponibles: `VP_SUBMIT=<N>`, `RT_OFFDBG`, `DRAWARGS`.
-3. **¿El juego espera algo?** Puede que la escena sea la pantalla de título detrás del vídeo y que la composición
-   dependa de que acabe el vídeo o la carga (CRI Mana atascado / `PS3_FS_HIDE`), o de un trabajo SPU.
-   - Mirar los hilos parados con `PS3_TICKDBG=1` y en qué esperan.
-4. Comparar con **RPCS3** en el mismo momento: `local/RPCS3.log` existe, y una captura RenderDoc de RPCS3 dice qué
-   draw escribe el buffer de pantalla y con qué método.
+**Siguiente acción:** investigar la sobrescritura del FIFO en la transición. En codex_menu08/09, IO 0x21B98
+se lee como FEAD0101 y luego el volcado muestra vértices allí; 0x21B9C produce unmapped-JUMP y put=0.
+Instrumentar `gcm_flip_into_fifo` (wrap anticipado), contexto y escrituras put/get. No asumir el escritor.
+El experimento codex_menu10 (llamar cellGcm_fifo_recycle desde el wrap anticipado) se bloqueó antes del título
+y fue RETIRADO. No reintroducirlo sin resolver el orden de solicitud/completado del flip.
 
-Cómo comprobar el arreglo:
-- `tools/run_game.ps1` con `PRESENT_LOG=4000` debe mostrar `on>0 present=1` en los lotes de ~570 draws;
-- `-capture` o `CELLMARK_DUMP` deben enseñar la escena;
-- `python -I tools/frame_stats.py <carpeta>` no debe dar 0.
+También aparece SPU sin recompilar: fp=0x7EAD6B29FC048F09, size=65056, owner=0x01D70500. Volcar con
+`SPU_DUMP_MISS` e identificar; aún no se conoce su papel. Pruebas codex_menu07–10 y detalles en NOTAS.
+El Arreglo 12 limita el log de atributos a ocho entradas y requiere RSX_INLINE_TRACE.
+
+Controles Windows: Enter=START, Z=cruz, X=círculo, flechas=dirección (ventana enfocada); XInput preferido.
+Para pruebas, PAD_SCRIPT usa segundos desde el primer sondeo: `55:0x0008,75:0x4000`.
+PAD_FILE=<ruta absoluta> acepta máscara y número de informes; `0x0008 4` prueba START sin GUI.
+Los guardados usan cwd por defecto: fijar PS3_GAMEDATA_ROOT absoluto para comprobar persistencia.
+
 
 ### 2. Animación (T-pose)
 Ver qué trabajos SPURS (job chains / tasksets) despacha el juego en esa fase. `SPU_DUMP_MISS=<carpeta>` vuelca los
@@ -120,6 +115,11 @@ carpeta **nueva** en cada prueba; no borres carpetas viejas con comodines.
 
 | Variable | Qué hace |
 |---|---|
+| `RSX_VERTEX_CAPACITY=N` | Capacidad fija de vértices por fotograma: rango 393216–2097152; el port usa 2097152 |
+| `RSX_UPLOAD_TRACE=1` | Bytes usados y capacidad al enviar draws inline |
+| `RSX_INLINE_TRACE=1` | Destino y tamaño de draws INLINE_ARRAY (rsx_commands.c) |
+| `GCM_FLIP_TRACE=1` | Buffer registrado solicitado por flip (cellGcmSys.c) |
+| `RSX_UNK=1` | Métodos RSX desconocidos en Fast, una línea por método (rsx_commands.c) |
 | `PRESENT_LOG=N` | Una línea por `render_frame`: origen (1 límite de clear, 2 flip, 3 d3d12_present), draws a pantalla (`on`) y fuera (`off`), si presenta |
 | `VP_SUBMIT=N` | Por lote: a qué RT van los draws (`[PRESENTGATE]`) |
 | `DRAWARGS`, `RT_OFFDBG` | Detalle por draw / por RT fuera de pantalla |
@@ -149,7 +149,7 @@ reducir los BMP a PNG y mirarlos.
 | `deps/ps3recomp/` | ps3recomp (repo git, commit fijado en `dependencies.json`) **con cambios locales sin commit** |
 | `patches/ps3recomp/0001-brave-soldiers-boot-fixes.patch` | Esos cambios en forma de parche. **Regenerarlo al final de cada turno**: `git -C deps/ps3recomp diff > patches/ps3recomp/0001-brave-soldiers-boot-fixes.patch` |
 | `local/` | **Privado**: EBOOT descifrado, juego, código recompilado (`local/recomp/recompiled`), SPU, logs de las pruebas |
-| `NOTAS_DEPURACION.md` | Bitácora técnica de cada arreglo (Arreglos 1–10) |
+| `NOTAS_DEPURACION.md` | Bitácora técnica de cada arreglo (Arreglos 1–12) |
 | `PLAN_PORT_SAINT_SEIYA.md` | Hoja de ruta por fases con casillas |
 | `referencias/` | Budokai-NX y DBT-NX, solo para consulta |
 
@@ -168,3 +168,17 @@ Añade una entrada al final de cada turno: fecha, agente, qué se hizo y dónde 
   - Arreglos 1–10;
   - última sesión: INLINE_ARRAY, RT de 1280x720, parpadeo (dos presents por flip → `RSX_ACCUM_FRAME=1` por defecto);
   - se queda en el paso 1 (fase del Santuario en negro), sin empezar la pista 1.1 (`RSX_UNK`).
+
+- **2026-11-02 · Codex:**
+  - Arreglo 11: diagnóstico de agotamiento de vértices, capacidad configurable y valor propio del juego 2097152.
+  - Logs nuevos RSX_UNK / RSX_INLINE_TRACE / GCM_FLIP_TRACE / RSX_UPLOAD_TRACE.
+  - Pruebas codex_unk01, targets02, upload03, capacity04–06 bajo local/recomp.
+  - Confirmada visualmente pantalla de título completa en español; sin GCM_PRESENT_RT.
+  - Compilación final correcta; parche regenerado. Sin commits ni push.
+  - Próximo: comprobar START/mando y menú; después animación/audio/vídeo. Reducir memoria antes de Switch.
+
+- **2026-11-02 · Codex (continuación):**
+  - START funciona y crea partida. Menú no validado: bloquea tras el título, con evidencia de sobrescritura FIFO.
+  - Arreglo 12 limita el log INLINE_ARRAY; compilación correcta. Experimento de espera al wrap retirado.
+  - Nueva huella SPU 7EAD6B29FC048F09 (65056 bytes) pendiente de volcar/identificar.
+  - Logs y capturas codex_menu07–10 privados. Parche actualizado; sin commit ni push.

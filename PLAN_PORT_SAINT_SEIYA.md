@@ -139,7 +139,9 @@ Pendiente de verificar con los archivos: tamaño de `EBOOT.BIN`, número de SPU 
 - [x] Recompilar la imagen SPU de CRI Mana (ELF embebido en 0x01004580).
 - [x] Primer fotograma con contenido (2026-11-02): 64 RT fuera de pantalla + `GCM_PRESENT_RT=EE0000` muestran las ruinas del Santuario.
 - [x] Logos de arranque a 60 FPS sin parpadeo (INLINE_ARRAY, RT 1280x720, un present por flip)
-- [ ] Composición final de la fase del Santuario/título (sin draws a pantalla), cielo, UI 2D, animación (T-pose); vídeo de intro (CRI Mana) se atasca.
+- [x] Composición final y pantalla de título en español sin forzar RT (Arreglo 11): se agotaba el espacio de subida de vértices; capacidad configurable y valor propio del port de 2097152.
+- [x] START confirmado: dispara carga y creación de partida (codex_menu08/09). Diagnósticos INLINE_ARRAY limitados (Arreglo 12).
+- [ ] Resolver transición tras START: sobrescritura aparente del FIFO en 0x21B98/0x21B9C. Probar menú y combate; verificar cielo y animación (T-pose); resolver audio y vídeo de intro CRI Mana. Optimizar la reserva de vértices antes de Switch.
 - [ ] Implementar las funciones de SPURS que faltan.
 - [ ] Extraer y levantar los programas SPU; implementar lo que falte de cellSpurs / módulos que use el juego.
 - [ ] Arranque → menú → combate en PC. **No pasar a Switch hasta que esto sea jugable.**

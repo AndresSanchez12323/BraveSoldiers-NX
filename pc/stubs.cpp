@@ -166,6 +166,15 @@ static void font_ok(ppu_context* ctx) { ctx->gpr[3] = CELL_OK; }  /* SetResoluti
  * RSX_ACCUM_FRAME=0 in the environment restores the clear-boundary present. */
 static void game_env_defaults(void)
 {
+    /* The sanctuary fills the old 393216-vertex upload arena before the
+     * final composite. Reserve enough space for scene and post-processing. */
+    if (!getenv("RSX_VERTEX_CAPACITY")) {
+#ifdef _WIN32
+        _putenv_s("RSX_VERTEX_CAPACITY", "2097152");
+#else
+        setenv("RSX_VERTEX_CAPACITY", "2097152", 0);
+#endif
+    }
     if (!getenv("RSX_ACCUM_FRAME")) {
 #ifdef _WIN32
         _putenv_s("RSX_ACCUM_FRAME", "1");

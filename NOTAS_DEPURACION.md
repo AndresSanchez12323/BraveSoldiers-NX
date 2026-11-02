@@ -173,3 +173,46 @@ por defecto (`RSX_ACCUM_FRAME=0` lo revierte), así que se presenta una sola vez
 entero. Volcados: Dimps → transición blanca → CRIWARE, sin fotogramas negros intercalados.
 
 **Pendiente:** la fase de ~570 draws (Santuario/título) sigue sin draws a pantalla (`on=0`, `present=0`).
+
+### Arreglo 11: espacio de vértices agotado antes de la composición final
+La investigación con `RSX_UNK`, `RSX_INLINE_TRACE`, `GCM_FLIP_TRACE` y `RSX_UPLOAD_TRACE` confirma que el juego sí
+envía la composición a 0x0/0x3C0000. El backend la descartaba porque agotaba la reserva de vértices antes de llegar
+a ella: 100663296 bytes usados de 100663296, con 571 draws. Ampliar a 1048576 vértices permitió la carga, pero
+la escena posterior también agotó ese espacio (268435200 de 268435456 bytes).
+
+El backend permite configurar `RSX_VERTEX_CAPACITY` una sola vez antes de reservar memoria (rango 393216–2097152;
+conserva 393216 por defecto). El port establece 2097152 en `pc/stubs.cpp`, salvo valor explícito del usuario.
+Así conserva una capacidad coherente entre las dos reservas alternas. Coste: 512 MiB por reserva, 1 GiB total
+de memoria de subida en PC; habrá que optimizar su uso antes del port a Switch.
+
+Validación: `local/recomp/codex_capacity06`, 80 segundos, sin `GCM_PRESENT_RT`: 1751 registros,
+`on=16 off=1730 clears=5 present=1`, unos 295088640 bytes usados de 536870912. Los volcados muestran carga,
+emblema de Atenea y la pantalla de título completa con «PULSA EL BOTÓN START (INICIO)» en español (`title.png`).
+Compilación final correcta con el nuevo valor predeterminado. Quedan por verificar entrada al menú y combate;
+siguen pendientes animación, audio y vídeo de intro. Esta prueba sustituye la hipótesis anterior de que faltaban
+comandos de composición en el FIFO.
+
+### Arreglo 12: limitar los diagnósticos de INLINE_ARRAY
+El contador PS3_LOG_FIRST se satura en ocho. El bloque de atributos usaba `n <= 8` fuera del condicional,
+por lo que imprimía cada draw posterior indefinidamente. Ahora toda la salida detallada queda bajo
+`RSX_INLINE_TRACE` y el mismo límite de ocho. Compilación Fast correcta; en codex_menu09 no hay inundación
+continua de líneas `[RSX]   attribs:`. No cambia el renderizado ni resuelve la transición al menú.
+
+### Pruebas de START y transición al menú (2026-11-02 · Codex)
+- codex_menu07 (58 s): START a los 35 s llegó antes de que el título estuviera listo; no avanzó.
+- codex_menu08 (115 s): START a los 55 s sí dispara AutoLoad2, diálogo de ausencia de partida y AutoSave2.
+  Guarda SAVEDATA.DAT (14564 B), además de imágenes. El diálogo HLE responde YES automáticamente.
+  Después solo se ve el fondo estrellado y el FIFO interpreta datos de vértices como comandos.
+- codex_menu09 (100 s): reproduce START a 50 s con GCM_RECDBG y PS3_TICKDBG. En IO 0x21B98 el lector vio
+  FEAD0101; el volcado posterior contiene datos de vértices en esa misma zona. En 0x21B9C salta a una
+  dirección sin mapear y resincroniza a put=0. Evidencia compatible con sobrescritura de comandos todavía
+  pendientes; falta identificar al escritor exacto. No declarar menú jugable.
+- Aparece un programa SPU desconocido de 65056 bytes, huella 0x7EAD6B29FC048F09, owner 0x01D70500.
+  Falta volcarlo e identificarlo; todavía no está demostrado que sea animación ni la causa del bloqueo.
+- codex_menu10: experimento que usaba cellGcm_fifo_recycle en el wrap anticipado de gcm_flip_into_fifo.
+  Se detiene antes del título (draw ~16000, sin pulsación START). Experimento RETIRADO; no conservarlo.
+  La próxima investigación debe instrumentar el wrap anticipado, el contexto y las escrituras put/get,
+  sin bloquear dentro de la solicitud de flip. Activar SPU_DUMP_MISS para obtener el binario desconocido.
+- Cada prueba usa un cwd nuevo, y los guardados HLE son relativos por defecto. Un LOAD inicial completo
+  no demuestra persistencia de la partida creada después de START. Usar PS3_GAMEDATA_ROOT absoluto para
+  una prueba específica de persistencia, preservando las carpetas existentes.
