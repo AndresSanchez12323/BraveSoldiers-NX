@@ -1,0 +1,25 @@
+# Archivos del juego y derivados: nunca al repositorio
+local/
+gamedata/
+*.bmp
+*.usm
+*.cpk
+generated/
+*.iso
+*.pkg
+*.rap
+EBOOT.BIN
+EBOOT.ELF
+*.sprx
+*.self
+*.elf
+
+# Clones de consulta y dependencias (fijadas en dependencies.json)
+referencias/
+deps/
+ISO/
+
+# Build
+build/
+out/
+__pycache__/

@@ -1,0 +1,34 @@
+{
+    "game": {
+        "title": "Saint Seiya: Brave Soldiers",
+        "platform": "PS3",
+        "known_title_ids": [
+            "BLES01936",
+            "BLJS10236"
+        ],
+        "supported": {
+            "title_id": "BLES01936",
+            "app_ver": "01.00",
+            "eboot_bin_sha256": "78BF735E916F6A0C59104C520C7104E942F9672267359F77B10FB972AAEC6EA5",
+            "eboot_bin_size": 27320568
+        }
+    },
+    "recompiler": {
+        "repository": "https://github.com/sp00nznet/ps3recomp",
+        "version": "0.18.0",
+        "commit": "4e8f3ca87a3e1d87bb83b8b7e9348fe2685cd514",
+        "license": "MIT"
+    },
+    "switch_references": {
+        "budokai_nx": {
+            "repository": "https://gitlab.com/alexyt2021es/Budokai-NX",
+            "use": "Estructura switch/, toolchain Docker, fases diagnostico/loader/boot-trace, preparador web y actualizador"
+        },
+        "bejeweled3_nx": {
+            "repository": "https://github.com/ChanseyIsTheBest/bejeweled3-nx",
+            "commit": "b4ca88954303da539f2e034fd81e50538fbb8d7e",
+            "use": "plume (deko3d) y uam"
+        },
+        "devkit_image": "ghcr.io/autorunhq/switch-dev:2026.10.01"
+    }
+}
