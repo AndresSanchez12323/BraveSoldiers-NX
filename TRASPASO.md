@@ -10,6 +10,9 @@ le acaba el límite. Quien retome el trabajo:
 
 El usuario habla español: responde en español.
 
+Repositorio público: https://github.com/AndresSanchez12323/BraveSoldiers-NX. Al cambiar de agente conviene un commit
+(solo si el usuario lo pide), para poder volver atrás si algo se rompe.
+
 ---
 
 ## Estado actual (2026-11-02, fin del turno de Claude)

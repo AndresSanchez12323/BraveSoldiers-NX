@@ -11,8 +11,10 @@ El usuario alterna entre agentes; al terminar tu turno, actualiza `TRASPASO.md`.
 - **Nunca distribuyas** archivos del juego ni código generado a partir de él. Todo eso va en `local/` (privado):
   no lo subas, no lo pegues en servicios externos y no lo saques de `local/`.
 - No cambies ajustes de seguridad del sistema (Smart App Control, Defender, etc.); los cambia el usuario.
-- **Commits solo cuando el usuario lo pida.** La raíz del proyecto no es un repo git. `deps/ps3recomp` sí lo es, pero
-  sus cambios se guardan como parche en `patches/ps3recomp/`.
+- **Commits y push solo cuando el usuario lo pida.** El proyecto es un repo **público**:
+  https://github.com/AndresSanchez12323/BraveSoldiers-NX (rama `main`).
+  - Antes de cada commit revisa `git status`: no debe entrar nada de `local/`, `gamedata/`, `ISO/`, `deps/` ni `build/`.
+  - Los cambios en `deps/ps3recomp` (que es su propio repo) se guardan como parche en `patches/ps3recomp/`.
 - No borres carpetas de pruebas con comodines (`local/recomp/frames*`, etc.): crea carpetas nuevas.
 - Los cambios en ps3recomp deben seguir el estilo del archivo: comentarios en inglés que explican el *porqué*, y
   diagnósticos detrás de una variable de entorno.
